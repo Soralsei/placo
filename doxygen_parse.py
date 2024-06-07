@@ -148,7 +148,7 @@ def parse_xml(xml_file: str):
             parse_compound(compounddef_node)
 
 
-def resolve_doxygen_id(id: list|str):
+def resolve_doxygen_id(id):
     if type(id) == list:
         tpl = resolve_doxygen_id(id[0])
         typ = resolve_doxygen_id(id[1])
