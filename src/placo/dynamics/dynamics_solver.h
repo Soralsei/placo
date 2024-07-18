@@ -23,7 +23,6 @@
 // Constraints
 #include "placo/dynamics/constraint.h"
 #include "placo/dynamics/avoid_self_collisions_constraint.h"
-#include "placo/dynamics/reaction_ratio_constraint.h"
 
 // Problem formulation
 #include "placo/problem/problem.h"
@@ -35,7 +34,7 @@ class DynamicsSolver
 public:
   struct Result
   {
-    // Checks if the gravity computation is a success
+    // Indicate whether the problem was solved
     bool success;
 
     // The following equation should hold: M qdd + b = tau + tau_contacts
@@ -43,7 +42,7 @@ public:
     // With:
     // - M: the mass matrix
     // - qdd: joint-space acceleration
-    // - b: non-linear (bias) terms
+    // - b: non-linear (bias) terms (+ optionally solver.extra_force)
     // - tau: applied torques vector
     // - tau_contacts: contact forces
 
@@ -57,48 +56,11 @@ public:
     Eigen::VectorXd tau_contacts;
   };
 
-  struct OverrideJoint
-  {
-    // If passive is true, tau will be computed as a function of kp and kd
-    bool passive;
-    double kp;
-    double kd;
-
-    // Else, a custom tau will be used
-    double tau;
-  };
-
   DynamicsSolver(model::RobotWrapper& robot);
   virtual ~DynamicsSolver();
 
   // Contacts
   std::vector<Contact*> contacts;
-
-  // Override joints (passive or custom tau)
-  std::map<std::string, OverrideJoint> override_joints;
-
-  /**
-   * @brief Sets a DoF as passive, the corresponding tau will be fixed in the equation of motion
-   *        it can be purely passive joint or a spring-like behaviour
-   * @param joint_name the joint
-   * @param is_passive true if the should the joint be passive
-   * @param kp kp gain if the joint is a spring (0 by default)
-   * @param kd kd gain if the joint is a spring (0 by default)
-   */
-  void set_passive(const std::string& joint_name, double kp = 0., double kd = 0.);
-
-  /**
-   * @brief Sets a custom torque to be applied by a given joint
-   * @param joint_name the joint
-   * @param tau torque
-   */
-  void set_tau(const std::string& joint_name, double tau);
-
-  /**
-   * @brief Resets a given joint so that its torque is no longer overriden
-   * @param joint_name the joint
-   */
-  void reset_joint(const std::string& joint_name);
 
   /**
    * @brief Adds a position (in the world) task
@@ -258,20 +220,6 @@ public:
   PointContact& add_unilateral_point_contact(PositionTask& position_task);
 
   /**
-   * @brief Adds a relative point contact, which can be typically used for internal forces like loop-closing
-   * @param position_task associated relative position task
-   * @return relative point contact
-   */
-  RelativePointContact& add_relative_point_contact(RelativePositionTask& position_task);
-
-  /**
-   * @brief Adds a relative fixed contact, can be used for fixed closed loops
-   * @param frame_task the associated relative frame task
-   * @return relative fixed contact
-   */
-  Relative6DContact& add_relative_fixed_contact(RelativeFrameTask& frame_task);
-
-  /**
    * @brief Adds a fixed contact
    * @param frame_task the associated frame task
    * @return fixed contact
@@ -286,18 +234,36 @@ public:
   Contact6D& add_planar_contact(FrameTask& frame_task);
 
   /**
+   * @brief Adds a fixed line contact
+   * @param frame_task associated frame task
+   * @return line contact
+   */
+  LineContact& add_line_contact(FrameTask& frame_task);
+
+  /**
+   * @brief Adds a unilateral line contact, which is unilateral in the sense of the local body z-axis
+   * @param frame_task associated frame task
+   * @return unilateral line contact
+   */
+  LineContact& add_unilateral_line_contact(FrameTask& frame_task);
+
+  /**
    * @brief Adds an external wrench
    * @param frame_index
+   * @param reference
    * @return external wrench contact
    */
-  ExternalWrenchContact& add_external_wrench_contact(model::RobotWrapper::FrameIndex frame_index);
+  ExternalWrenchContact&
+  add_external_wrench_contact(model::RobotWrapper::FrameIndex frame_index,
+                              pinocchio::ReferenceFrame reference = pinocchio::LOCAL_WORLD_ALIGNED);
 
   /**
    * @brief Adds an external wrench
    * @param frame_name frame
+   * @param reference reference frame (world or local)
    * @return external wrench contact
    */
-  ExternalWrenchContact& add_external_wrench_contact(std::string frame_name);
+  ExternalWrenchContact& add_external_wrench_contact(std::string frame_name, std::string reference = "world");
 
   /**
    * @brief Adds a puppet contact, this will add some free contact forces for the whole system, allowing it
@@ -318,14 +284,6 @@ public:
    * @return constraint
    */
   AvoidSelfCollisionsConstraint& add_avoid_self_collisions_constraint();
-
-  /**
-   * @brief Adds a constraint enforce reaction ratio
-   * @param contact contact
-   * @param reaction_ratio reaction ratio to enforce
-   * @return reaction ratio constraint
-   */
-  ReactionRatioConstraint& add_reaction_ratio_constraint(Contact& contact, double reaction_ratio);
 
   /**
    * @brief Enables/disables joint limits inequalities
@@ -371,18 +329,6 @@ public:
   Result solve(bool integrate = false);
 
   /**
-   * @brief Masks (disables a DoF) from being used by the QP solver (it can't provide speed)
-   * @param dof the dof name
-   */
-  void mask_dof(std::string dof);
-
-  /**
-   * @brief Unmsks (enables a DoF) from being used by the QP solver (it can provide speed)
-   * @param dof the dof name
-   */
-  void unmask_dof(std::string dof);
-
-  /**
    * @brief Decides if the floating base should be masked
    */
   void mask_fbase(bool masked);
@@ -414,9 +360,38 @@ public:
   void remove_constraint(Constraint& constraint);
 
   /**
-   * @brief Global friction that is added to all the joints
+   * @brief Set the kp for all tasks
+   * @param kp
    */
-  double friction = 0.;
+  void set_kp(double kp);
+
+  /**
+   * @brief Set the kp for all tasks
+   * @param kpd
+   */
+  void set_kd(double kd);
+
+  /**
+   * @brief Sets the "safe" Qdd acceptable for a given joint (used by joint limits)
+   * @param joint
+   * @param qdd
+   */
+  void set_qdd_safe(std::string joint, double qdd);
+
+  /**
+   * @brief Sets the allowed torque limit by the solver for a given joint. This will not affect the robot's model
+   * effort limit. When computing the velocity vs torque limit, the robot's model effort will still be used.
+   * You can see this limit as a continuous limit allowable for the robot, while the robot's model limit is the
+   * maximum possible torque.
+   * @param joint
+   * @param limit
+   */
+  void set_torque_limit(std::string joint, double limit);
+
+  /**
+   * @brief Global damping that is added to all the joints
+   */
+  double damping = 0.;
 
   /**
    * @brief Solver dt (seconds)
@@ -431,7 +406,12 @@ public:
   /**
    * @brief The value of qdd safe
    */
-  double qdd_safe = 1.;
+  std::map<int, double> qdd_safe;
+
+  /**
+   * @brief Continuous torque limits
+   */
+  std::map<int, double> overriden_torque_limits;
 
   /**
    * @brief Use gravity only (no coriolis, no centrifugal)
@@ -439,7 +419,7 @@ public:
   bool gravity_only = false;
 
   /**
-   * @brief Cost for torque regularization
+   * @brief Cost for torque regularization (1e-3 by default)
    */
   double torque_cost = 1e-3;
 

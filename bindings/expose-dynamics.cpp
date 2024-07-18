@@ -13,8 +13,10 @@ using namespace placo::dynamics;
 using namespace placo::model;
 
 // Overloads
-BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(set_passive_overloads, set_passive, 1, 3);
+BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(frame_configure_overloads, configure, 2, 4);
 BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(solve_overloads, solve, 0, 1);
+BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(set_torque_overloads, set_torque, 2, 4);
+BOOST_PYTHON_MEMBER_FUNCTION_OVERLOADS(set_joint_overloads, set_joint, 2, 4);
 
 void exposeDynamics()
 {
@@ -42,6 +44,7 @@ void exposeDynamics()
       .def_readwrite("active", &Contact::active)
       .def_readwrite("mu", &Contact::mu)
       .def_readwrite("weight_forces", &Contact::weight_forces)
+      .def_readwrite("weight_tangentials", &Contact::weight_tangentials)
       .def_readwrite("weight_moments", &Contact::weight_moments)
       .add_property(
           "wrench", +[](Contact& contact) { return contact.wrench; });
@@ -50,7 +53,10 @@ void exposeDynamics()
       .def(
           "position_task", +[](PointContact& contact) -> PositionTask& { return *contact.position_task; },
           return_internal_reference<>())
-      .def_readwrite("unilateral", &PointContact::unilateral);
+      .def_readwrite("unilateral", &PointContact::unilateral)
+      .add_property(
+          "R_world_surface", +[](PointContact& contact) { return contact.R_world_surface; },
+          +[](PointContact& contact, Eigen::Matrix3d R) { contact.R_world_surface = R; });
 
   class__<Contact6D, bases<Contact>>("Contact6D", init<FrameTask&, bool>())
       .def(
@@ -64,9 +70,19 @@ void exposeDynamics()
       .def_readwrite("width", &Contact6D::width)
       .def("zmp", &Contact6D::zmp);
 
-  class__<RelativePointContact, bases<Contact>>("RelativePointContact", init<RelativePositionTask&>());
-
-  class__<Relative6DContact, bases<Contact>>("Relative6DContact", init<RelativeFrameTask&>());
+  class__<LineContact, bases<Contact>>("LineContact", init<FrameTask&, bool>())
+      .def(
+          "position_task", +[](LineContact& contact) -> PositionTask& { return *contact.position_task; },
+          return_internal_reference<>())
+      .def(
+          "orientation_task", +[](LineContact& contact) -> OrientationTask& { return *contact.orientation_task; },
+          return_internal_reference<>())
+      .def_readwrite("unilateral", &LineContact::unilateral)
+      .def_readwrite("length", &LineContact::length)
+      .def("zmp", &LineContact::zmp)
+      .add_property(
+          "R_world_surface", +[](PointContact& contact) { return contact.R_world_surface; },
+          +[](PointContact& contact, Eigen::Matrix3d R) { contact.R_world_surface = R; });
 
   class__<ExternalWrenchContact, bases<Contact>>("ExternalWrenchContact", init<RobotWrapper::FrameIndex>())
       .add_property("frame_index", &ExternalWrenchContact::frame_index)
@@ -79,29 +95,25 @@ void exposeDynamics()
 
   class__<DynamicsSolver>("DynamicsSolver", init<RobotWrapper&>())
       .add_property("problem", &DynamicsSolver::problem)
-      .def_readwrite("friction", &DynamicsSolver::friction)
+      .def_readwrite("damping", &DynamicsSolver::damping)
       .def_readwrite("dt", &DynamicsSolver::dt)
-      .def_readwrite("qdd_safe", &DynamicsSolver::qdd_safe)
+      .def("set_qdd_safe", &DynamicsSolver::set_qdd_safe)
+      .def("set_torque_limit", &DynamicsSolver::set_torque_limit)
       .def_readwrite("gravity_only", &DynamicsSolver::gravity_only)
       .def_readwrite("torque_cost", &DynamicsSolver::torque_cost)
       .def("mask_fbase", &DynamicsSolver::mask_fbase)
       .def("add_point_contact", &DynamicsSolver::add_point_contact, return_internal_reference<>())
       .def("add_unilateral_point_contact", &DynamicsSolver::add_unilateral_point_contact, return_internal_reference<>())
-      .def("add_relative_point_contact", &DynamicsSolver::add_relative_point_contact, return_internal_reference<>())
-      .def("add_relative_fixed_contact", &DynamicsSolver::add_relative_fixed_contact, return_internal_reference<>())
       .def("add_planar_contact", &DynamicsSolver::add_planar_contact, return_internal_reference<>())
       .def("add_fixed_contact", &DynamicsSolver::add_fixed_contact, return_internal_reference<>())
-      .def<ExternalWrenchContact& (DynamicsSolver::*)(std::string)>(
+      .def("add_line_contact", &DynamicsSolver::add_line_contact, return_internal_reference<>())
+      .def("add_unilateral_line_contact", &DynamicsSolver::add_unilateral_line_contact, return_internal_reference<>())
+      .def<ExternalWrenchContact& (DynamicsSolver::*)(std::string, std::string)>(
           "add_external_wrench_contact", &DynamicsSolver::add_external_wrench_contact, return_internal_reference<>())
       .def("add_puppet_contact", &DynamicsSolver::add_puppet_contact, return_internal_reference<>())
       .def("add_task_contact", &DynamicsSolver::add_task_contact, return_internal_reference<>())
       .def("add_avoid_self_collisions_constraint", &DynamicsSolver::add_avoid_self_collisions_constraint,
            return_internal_reference<>())
-      .def("add_reaction_ratio_constraint", &DynamicsSolver::add_reaction_ratio_constraint,
-           return_internal_reference<>())
-      .def("set_passive", &DynamicsSolver::set_passive, set_passive_overloads())
-      .def("set_tau", &DynamicsSolver::set_tau)
-      .def("reset_joint", &DynamicsSolver::reset_joint)
       .def("enable_velocity_limits", &DynamicsSolver::enable_velocity_limits)
       .def("enable_velocity_vs_torque_limits", &DynamicsSolver::enable_velocity_vs_torque_limits)
       .def("enable_joint_limits", &DynamicsSolver::enable_joint_limits)
@@ -116,6 +128,8 @@ void exposeDynamics()
       .def<void (DynamicsSolver::*)(FrameTask&)>("remove_task", &DynamicsSolver::remove_task)
       .def("remove_contact", &DynamicsSolver::remove_contact)
       .def("remove_constraint", &DynamicsSolver::remove_constraint)
+      .def("set_kp", &DynamicsSolver::set_kp)
+      .def("set_kd", &DynamicsSolver::set_kd)
       .add_property(
           "robot", +[](const DynamicsSolver& solver) { return solver.robot; })
       .def(
@@ -153,7 +167,6 @@ void exposeDynamics()
           "b", +[](const Task& task) { return task.b; })
       .add_property("kp", &Task::kp, &Task::kp)
       .add_property("kd", &Task::kd, &Task::kd)
-      .add_property("critically_damped", &Task::critically_damped, &Task::critically_damped)
       .add_property("error", &Task::error)
       .add_property("derror", &Task::derror);
 
@@ -163,6 +176,8 @@ void exposeDynamics()
           "target_world", +[](const PositionTask& task) { return task.target_world; }, &PositionTask::target_world)
       .add_property(
           "dtarget_world", +[](const PositionTask& task) { return task.dtarget_world; }, &PositionTask::dtarget_world)
+      .add_property(
+          "ddtarget_world", +[](const PositionTask& task) { return task.dtarget_world; }, &PositionTask::ddtarget_world)
       .add_property("mask", &PositionTask::mask, &PositionTask::mask);
 
   class__<CoMTask, bases<Task>>("DynamicsCoMTask", init<Eigen::Vector3d>())
@@ -215,7 +230,7 @@ void exposeDynamics()
       .def(
           "orientation", +[](const FrameTask& task) -> OrientationTask& { return *task.orientation; },
           return_internal_reference<>())
-      .def("configure", &FrameTask::configure)
+      .def("configure", &FrameTask::configure, frame_configure_overloads())
       .add_property("T_world_frame", &FrameTask::get_T_world_frame, &FrameTask::set_T_world_frame);
 
   class__<RelativeFrameTask>("DynamicsRelativeFrameTask", init<>())
@@ -230,7 +245,7 @@ void exposeDynamics()
       .add_property("T_a_b", &RelativeFrameTask::get_T_a_b, &RelativeFrameTask::set_T_a_b);
 
   class__<JointsTask, bases<Task>>("DynamicsJointsTask", init<>())
-      .def("set_joint", &JointsTask::set_joint)
+      .def("set_joint", &JointsTask::set_joint, set_joint_overloads())
       .def(
           "set_joints", +[](JointsTask& task,
                             boost::python::dict& py_dict) { update_map<std::string, double>(task.joints, py_dict); })
@@ -239,7 +254,9 @@ void exposeDynamics()
             update_map<std::string, double>(task.djoints, py_dict);
           });
 
-  class__<TorqueTask, bases<Task>>("DynamicsTorqueTask", init<>()).def("set_torque", &TorqueTask::set_torque);
+  class__<TorqueTask, bases<Task>>("DynamicsTorqueTask", init<>())
+      .def("set_torque", &TorqueTask::set_torque, set_torque_overloads())
+      .def("reset_torque", &TorqueTask::reset_torque);
 
   class__<GearTask, bases<Task>>("DynamicsGearTask", init<>())
       .def("set_gear", &GearTask::set_gear)
@@ -250,7 +267,4 @@ void exposeDynamics()
   class__<AvoidSelfCollisionsConstraint, bases<Constraint>>("AvoidSelfCollisionsDynamicsConstraint", init<>())
       .def_readwrite("self_collisions_margin", &AvoidSelfCollisionsConstraint::self_collisions_margin)
       .def_readwrite("self_collisions_trigger", &AvoidSelfCollisionsConstraint::self_collisions_trigger);
-
-  class__<ReactionRatioConstraint, bases<Constraint>>("DynamicsReactionRatioConstraint", init<Contact&, double>())
-      .def_readwrite("reaction_ratio", &ReactionRatioConstraint::reaction_ratio);
 }

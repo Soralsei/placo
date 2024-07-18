@@ -225,6 +225,16 @@ public:
   void update_kinematics();
 
   /**
+   * @brief Compute kinematics hessians
+   */
+  void compute_hessians();
+
+  /**
+   * @brief Get the component for the hessian of a given frame for a given joint
+   */
+  Eigen::MatrixXd get_frame_hessian(FrameIndex frame, int joint_v_index);
+
+  /**
    * @brief Gets the CoM position in the world
    */
   Eigen::Vector3d com_world();
@@ -619,6 +629,11 @@ public:
    * @brief Total mass
    */
   double total_mass();
+
+  /**
+   * @brief Adds some noise to the configuration
+   */
+  void add_q_noise(double noise);
 
   /**
    * @brief URDF model directory

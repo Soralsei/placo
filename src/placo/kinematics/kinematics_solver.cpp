@@ -162,6 +162,35 @@ RegularizationTask& KinematicsSolver::add_regularization_task(double magnitude)
   return task;
 }
 
+ManipulabilityTask& KinematicsSolver::add_manipulability_task(model::RobotWrapper::FrameIndex frame,
+                                                              ManipulabilityTask::Type type, double lambda)
+{
+  return add_task(new ManipulabilityTask(frame, type, lambda));
+}
+
+ManipulabilityTask& KinematicsSolver::add_manipulability_task(std::string frame, std::string type, double lambda)
+{
+  ManipulabilityTask::Type type_;
+  if (type == "position")
+  {
+    type_ = ManipulabilityTask::Type::POSITION;
+  }
+  else if (type == "orientation")
+  {
+    type_ = ManipulabilityTask::Type::ORIENTATION;
+  }
+  else if (type == "both")
+  {
+    type_ = ManipulabilityTask::Type::BOTH;
+  }
+  else
+  {
+    throw std::runtime_error("Unknown manipulability type: " + type);
+  }
+
+  return add_manipulability_task(robot.get_frame_index(frame), type_, lambda);
+}
+
 KineticEnergyRegularizationTask& KinematicsSolver::add_kinetic_energy_regularization_task(double magnitude)
 {
   KineticEnergyRegularizationTask& task = add_task(new KineticEnergyRegularizationTask());
@@ -241,23 +270,6 @@ void KinematicsSolver::compute_limits_inequalities()
   {
     problem.add_constraint(qd->expr(6) <= dt * robot.model.velocityLimit.bottomRows(N - 6));
     problem.add_constraint(-dt * robot.model.velocityLimit.bottomRows(N - 6) <= qd->expr(6));
-  }
-}
-
-void KinematicsSolver::add_q_noise(double noise)
-{
-  auto q_random = pinocchio::randomConfiguration(robot.model);
-
-  // Adding some noise in direction of a random configuration (except floating base)
-  for (int k = 7; k < robot.model.nq; k++)
-  {
-    if (robot.model.lowerPositionLimit(k) == std::numeric_limits<double>::lowest() ||
-        robot.model.upperPositionLimit(k) == std::numeric_limits<double>::max())
-    {
-      continue;
-    }
-
-    robot.state.q(k) += (q_random(k) - robot.state.q(k)) * noise;
   }
 }
 

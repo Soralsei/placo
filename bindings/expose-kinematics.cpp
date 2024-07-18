@@ -76,6 +76,10 @@ void exposeKinematics()
           // Regularization task
           .def("add_regularization_task", &KinematicsSolver::add_regularization_task, return_internal_reference<>())
 
+          // Manipulability task
+          .def<ManipulabilityTask& (KinematicsSolver::*)(std::string, std::string, double)>(
+              "add_manipulability_task", &KinematicsSolver::add_manipulability_task, return_internal_reference<>())
+
           // Kinetic energy regularization task
           .def("add_kinetic_energy_regularization_task", &KinematicsSolver::add_kinetic_energy_regularization_task,
                return_internal_reference<>())
@@ -110,8 +114,7 @@ void exposeKinematics()
           .def<void (KinematicsSolver::*)(Task&)>("remove_task", &KinematicsSolver::remove_task)
           .def<void (KinematicsSolver::*)(FrameTask&)>("remove_task", &KinematicsSolver::remove_task)
           .def("remove_constraint", &KinematicsSolver::remove_constraint)
-          .def("solve", &KinematicsSolver::solve)
-          .def("add_q_noise", &KinematicsSolver::add_q_noise);
+          .def("solve", &KinematicsSolver::solve);
 
   class__<Task, bases<tools::Prioritized>, boost::noncopyable>("Task", no_init)
       .add_property(
@@ -215,6 +218,12 @@ void exposeKinematics()
       .add_property("L_world", &CentroidalMomentumTask::L_world, &CentroidalMomentumTask::L_world);
 
   class__<RegularizationTask, bases<Task>>("RegularizationTask");
+
+  class__<ManipulabilityTask, bases<Task>>("ManipulabilityTask",
+                                           init<RobotWrapper::FrameIndex, ManipulabilityTask::Type, double>())
+      .def_readwrite("lambda_", &ManipulabilityTask::lambda)
+      .def_readwrite("minimize", &ManipulabilityTask::minimize)
+      .def_readonly("manipulability", &ManipulabilityTask::manipulability);
 
   class__<KineticEnergyRegularizationTask, bases<RegularizationTask>>("KineticEnergyRegularizationTask");
 

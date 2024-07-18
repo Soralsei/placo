@@ -5,27 +5,6 @@ namespace placo::dynamics
 {
 using namespace placo::problem;
 
-void DynamicsSolver::set_passive(const std::string& joint_name, double kp, double kd)
-{
-  OverrideJoint oj;
-  oj.passive = true;
-  oj.kp = kp;
-  oj.kd = kd;
-  override_joints[joint_name] = oj;
-}
-
-void DynamicsSolver::set_tau(const std::string& joint_name, double tau)
-{
-  OverrideJoint oj;
-  oj.tau = tau;
-  override_joints[joint_name] = oj;
-}
-
-void DynamicsSolver::reset_joint(const std::string& joint_name)
-{
-  override_joints.erase(joint_name);
-}
-
 PointContact& DynamicsSolver::add_point_contact(PositionTask& position_task)
 {
   return add_contact(new PointContact(position_task, false));
@@ -34,16 +13,6 @@ PointContact& DynamicsSolver::add_point_contact(PositionTask& position_task)
 PointContact& DynamicsSolver::add_unilateral_point_contact(PositionTask& position_task)
 {
   return add_contact(new PointContact(position_task, true));
-}
-
-RelativePointContact& DynamicsSolver::add_relative_point_contact(RelativePositionTask& position_task)
-{
-  return add_contact(new RelativePointContact(position_task));
-}
-
-Relative6DContact& DynamicsSolver::add_relative_fixed_contact(RelativeFrameTask& frame_task)
-{
-  return add_contact(new Relative6DContact(frame_task));
 }
 
 Contact6D& DynamicsSolver::add_planar_contact(FrameTask& frame_task)
@@ -56,14 +25,37 @@ Contact6D& DynamicsSolver::add_fixed_contact(FrameTask& frame_task)
   return add_contact(new Contact6D(frame_task, false));
 }
 
-ExternalWrenchContact& DynamicsSolver::add_external_wrench_contact(model::RobotWrapper::FrameIndex frame_index)
+LineContact& DynamicsSolver::add_line_contact(FrameTask& frame_task)
 {
-  return add_contact(new ExternalWrenchContact(frame_index));
+  return add_contact(new LineContact(frame_task, false));
 }
 
-ExternalWrenchContact& DynamicsSolver::add_external_wrench_contact(std::string frame_name)
+LineContact& DynamicsSolver::add_unilateral_line_contact(FrameTask& frame_task)
 {
-  return add_external_wrench_contact(robot.get_frame_index(frame_name));
+  return add_contact(new LineContact(frame_task, true));
+}
+
+ExternalWrenchContact& DynamicsSolver::add_external_wrench_contact(model::RobotWrapper::FrameIndex frame_index,
+                                                                   pinocchio::ReferenceFrame reference)
+{
+  return add_contact(new ExternalWrenchContact(frame_index, reference));
+}
+
+ExternalWrenchContact& DynamicsSolver::add_external_wrench_contact(std::string frame_name, std::string reference)
+{
+  if (reference == "world")
+  {
+    return add_external_wrench_contact(robot.get_frame_index(frame_name), pinocchio::LOCAL_WORLD_ALIGNED);
+  }
+  else if (reference == "local")
+  {
+    return add_external_wrench_contact(robot.get_frame_index(frame_name), pinocchio::LOCAL);
+  }
+  else
+  {
+    throw std::runtime_error("DynamicsSolver::add_external_wrench_contact: unknown reference '" + reference +
+                             "' (should be 'world' or 'local')");
+  }
 }
 
 PuppetContact& DynamicsSolver::add_puppet_contact()
@@ -79,11 +71,6 @@ TaskContact& DynamicsSolver::add_task_contact(Task& task)
 AvoidSelfCollisionsConstraint& DynamicsSolver::add_avoid_self_collisions_constraint()
 {
   return add_constraint(new AvoidSelfCollisionsConstraint());
-}
-
-ReactionRatioConstraint& DynamicsSolver::add_reaction_ratio_constraint(Contact& contact, double reaction_ratio)
-{
-  return add_constraint(new ReactionRatioConstraint(contact, reaction_ratio));
 }
 
 PositionTask& DynamicsSolver::add_position_task(model::RobotWrapper::FrameIndex frame_index,
@@ -190,6 +177,11 @@ DynamicsSolver::DynamicsSolver(model::RobotWrapper& robot) : robot(robot)
   masked_fbase = false;
   problem.use_sparsity = false;
   problem.rewrite_equalities = true;
+
+  for (std::string joint : robot.joint_names())
+  {
+    set_qdd_safe(joint, 1.0);
+  }
 }
 
 DynamicsSolver::~DynamicsSolver()
@@ -209,7 +201,6 @@ void DynamicsSolver::enable_velocity_limits(bool enable)
 
 void DynamicsSolver::enable_velocity_vs_torque_limits(bool enable)
 {
-  velocity_limits = enable;
   velocity_vs_torque_limits = enable;
 }
 
@@ -220,31 +211,31 @@ void DynamicsSolver::enable_torque_limits(bool enable)
 
 void DynamicsSolver::compute_limits_inequalities(Expression& tau)
 {
-  if ((joint_limits || velocity_limits) && dt == 0.)
+  if ((joint_limits || velocity_limits || velocity_vs_torque_limits) && dt == 0.)
   {
     throw std::runtime_error("DynamicsSolver::compute_limits_inequalities: dt is not set");
   }
 
-  std::set<int> override_ids;
-  for (auto& override_joint : override_joints)
-  {
-    override_ids.insert(robot.get_joint_v_offset(override_joint.first));
-  }
-
   if (torque_limits)
   {
-    problem.add_constraint(tau.slice(6) <= robot.model.effortLimit.bottomRows(N - 6));
-    problem.add_constraint(tau.slice(6) >= -robot.model.effortLimit.bottomRows(N - 6));
+    Eigen::VectorXd effort_limit = robot.model.effortLimit;
+    for (auto& entry : overriden_torque_limits)
+    {
+      effort_limit[entry.first] = entry.second;
+    }
+
+    problem.add_constraint(tau.slice(6) <= effort_limit.bottomRows(N - 6));
+    problem.add_constraint(tau.slice(6) >= -effort_limit.bottomRows(N - 6));
   }
 
   int constraints = 0;
   if (joint_limits)
   {
-    constraints += 2 * (N - 6 - override_joints.size());
+    constraints += 2 * (N - 6);
   }
-  if (velocity_limits)
+  if (velocity_limits || velocity_vs_torque_limits)
   {
-    constraints += 2 * (N - 6 - override_joints.size());
+    constraints += 2 * (N - 6);
   }
 
   if (constraints > 0)
@@ -258,45 +249,38 @@ void DynamicsSolver::compute_limits_inequalities(Expression& tau)
     // Iterating for each actuated joints
     for (int k = 0; k < N - 6; k++)
     {
-      if (override_ids.count(k + 6) > 0)
-      {
-        continue;
-      }
       double q = robot.state.q[k + 7];
       double qd = robot.state.qd[k + 6];
 
-      if (velocity_limits)
+      if (velocity_vs_torque_limits)
       {
-        if (torque_limits && velocity_vs_torque_limits)
-        {
-          double ratio = robot.model.velocityLimit[k + 6] / robot.model.effortLimit[k + 6];
+        double ratio = robot.model.velocityLimit[k + 6] / robot.model.effortLimit[k + 6];
 
-          // qd + dt*qdd <= qd_max - ratio * tau
-          // ratio * tau + dt*qdd + qd - qd_max <= 0
-          e.A.block(constraint, 0, 1, problem.n_variables) = ratio * tau.A.block(k + 6, 0, 1, problem.n_variables);
-          e.b[constraint] = ratio * tau.b[k + 6];
-          e.A(constraint, k + 6) += dt;
-          e.b[constraint] += qd - robot.model.velocityLimit[k + 6];
-          constraint++;
+        // qd + dt*qdd <= qd_max - ratio * tau
+        // ratio * tau + dt*qdd + qd - qd_max <= 0
+        e.A.block(constraint, 0, 1, problem.n_variables) = ratio * tau.A.block(k + 6, 0, 1, problem.n_variables);
+        e.b[constraint] = ratio * tau.b[k + 6];
+        e.A(constraint, k + 6) += dt;
+        e.b[constraint] += qd - robot.model.velocityLimit[k + 6];
+        constraint++;
 
-          // qd + dt*qdd >= -qd_max - ratio * tau
-          // -ratio*tau - dt*qdd - qd - qd_max <= 0
-          e.A.block(constraint, 0, 1, problem.n_variables) = -ratio * tau.A.block(k + 6, 0, 1, problem.n_variables);
-          e.b[constraint] = -ratio * tau.b[k + 6];
-          e.A(constraint, k + 6) -= dt;
-          e.b[constraint] -= qd + robot.model.velocityLimit[k + 6];
-          constraint++;
-        }
-        else
-        {
-          e.A(constraint, k + 6) = dt;
-          e.b(constraint) = -robot.model.velocityLimit[k + 6] + qd;
-          constraint++;
+        // qd + dt*qdd >= -qd_max - ratio * tau
+        // -ratio*tau - dt*qdd - qd - qd_max <= 0
+        e.A.block(constraint, 0, 1, problem.n_variables) = -ratio * tau.A.block(k + 6, 0, 1, problem.n_variables);
+        e.b[constraint] = -ratio * tau.b[k + 6];
+        e.A(constraint, k + 6) -= dt;
+        e.b[constraint] -= qd + robot.model.velocityLimit[k + 6];
+        constraint++;
+      }
+      else if (velocity_limits)
+      {
+        e.A(constraint, k + 6) = dt;
+        e.b(constraint) = -robot.model.velocityLimit[k + 6] + qd;
+        constraint++;
 
-          e.A(constraint, k + 6) = -dt;
-          e.b(constraint) = -robot.model.velocityLimit[k + 6] - qd;
-          constraint++;
-        }
+        e.A(constraint, k + 6) = -dt;
+        e.b(constraint) = -robot.model.velocityLimit[k + 6] - qd;
+        constraint++;
       }
 
       if (joint_limits)
@@ -306,12 +290,12 @@ void DynamicsSolver::compute_limits_inequalities(Expression& tau)
           // We are in the contact, ensuring at least
           // qdd <= -qdd_safe
           e.A(constraint, k + 6) = 1;
-          e.b(constraint) = qdd_safe;
+          e.b(constraint) = qdd_safe[k + 6];
         }
         else
         {
           // qdd*dt + qd <= qd_max
-          double qd_max = sqrt(2. * (robot.model.upperPositionLimit[k + 7] - q) * qdd_safe);
+          double qd_max = sqrt(2. * (robot.model.upperPositionLimit[k + 7] - q) * qdd_safe[k + 6]);
           e.A(constraint, k + 6) = dt;
           e.b(constraint) = qd - qd_max;
         }
@@ -322,12 +306,12 @@ void DynamicsSolver::compute_limits_inequalities(Expression& tau)
           // We are in the contact, ensuring at least
           // qdd >= qdd_safe
           e.A(constraint, k + 6) = -1;
-          e.b(constraint) = qdd_safe;
+          e.b(constraint) = qdd_safe[k + 6];
         }
         else
         {
           // qdd*dt + qd >= -qd_max
-          double qd_max = sqrt(2. * fabs(robot.model.lowerPositionLimit[k + 7] - q) * qdd_safe);
+          double qd_max = sqrt(2. * fabs(robot.model.lowerPositionLimit[k + 7] - q) * qdd_safe[k + 6]);
           e.A(constraint, k + 6) = -dt;
           e.b(constraint) = -qd - qd_max;
         }
@@ -389,7 +373,7 @@ void DynamicsSolver::dump_status_stream(std::ostream& stream)
     stream << std::endl;
     char buffer[128];
     sprintf(buffer, "    - Error: %.06f [%s]\n", task->error.norm(), task->error_unit().c_str());
-    stream << buffer << std::endl;
+    stream << buffer;
     sprintf(buffer, "    - DError: %.06f [%s]\n", task->derror.norm(), task->error_unit().c_str());
     stream << buffer << std::endl;
   }
@@ -407,29 +391,6 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
 
   problem.clear_constraints();
   problem.clear_variables();
-
-  // Computing target torque for passive joints
-  std::vector<int> override_indices;
-  Eigen::VectorXd override_taus = Eigen::VectorXd::Zero(override_joints.size());
-  int k = 0;
-  for (auto& entry : override_joints)
-  {
-    std::string joint = entry.first;
-    OverrideJoint oj = entry.second;
-    double q = robot.get_joint(joint);
-    double qd = robot.get_joint_velocity(joint);
-    int index = robot.get_joint_v_offset(joint);
-    override_indices.push_back(index);
-
-    if (oj.tau)
-    {
-      override_taus[k++] = oj.tau;
-    }
-    else
-    {
-      override_taus[k++] = -q * oj.kp - qd * oj.kd;
-    }
-  }
 
   Expression qdd;
   Variable& qdd_variable = problem.add_variable(robot.model.nv);
@@ -450,7 +411,7 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
   // tau = M qdd + b - J^T F
 
   // M qdd
-  Expression tau = robot.mass_matrix() * qdd + robot.state.qd * friction;
+  Expression tau = robot.mass_matrix() * qdd + robot.state.qd * damping;
 
   // b
   if (gravity_only)
@@ -474,20 +435,10 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
     {
       contact->update();
 
-      ExternalWrenchContact* ext = dynamic_cast<ExternalWrenchContact*>(contact);
-      if (ext != nullptr)
-      {
-        Eigen::VectorXd w_ext = ext->w_ext;
-        tau.b -= contact->J.transpose() * w_ext;
-        contact->f = Expression::from_vector(w_ext);
-      }
-      else
-      {
-        // This contact will be an actual decision variable
-        Variable& f_variable = problem.add_variable(contact->size());
-        contact->f = f_variable.expr();
-        contact->add_constraints(problem);
-      }
+      // This contact will be an actual decision variable
+      Variable& f_variable = problem.add_variable(contact->size());
+      contact->f = f_variable.expr();
+      contact->add_constraints(problem);
     }
   }
 
@@ -498,16 +449,11 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
 
   // Now, tau = Ax + b with x = [qdd, f1, f2, ...], we copy J^T to the extended A
   // for forces that are decision variables
-  k = N;
+  int k = N;
   for (auto& contact : contacts)
   {
     if (contact->active)
     {
-      if (dynamic_cast<ExternalWrenchContact*>(contact) != nullptr)
-      {
-        continue;
-      }
-
       tau.A.block(0, k, N, contact->J.rows()) = -contact->J.transpose();
       tau.b -= contact->J.transpose() * contact->f.b;
       k += contact->J.rows();
@@ -536,12 +482,17 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
     }
 
     Expression e;
-    e.A = task->A;
-    e.b = -task->b;
     if (task->tau_task)
     {
-      e.A = e.A * tau.A;
+      e.A = task->A * tau.A;
+      e.b = task->A * tau.b - task->b;
     }
+    else
+    {
+      e.A = task->A;
+      e.b = -task->b;
+    }
+
     problem.add_constraint(e == 0).configure(task_priority, task->weight);
   }
 
@@ -558,17 +509,8 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
     problem.add_constraint(tau.slice(0, 6) == 0);
   }
 
-  // Enforce the override torques
-  if (override_taus.size() > 0)
-  {
-    Expression override_tau_expr;
-    override_tau_expr.A = tau.A(override_indices, Eigen::all);
-    override_tau_expr.b = tau.b(override_indices);
-    problem.add_constraint(override_tau_expr == override_taus);
-  }
-
-  // We want to minimize torques
-  problem.add_constraint(tau == 0).configure(ProblemConstraint::Soft, torque_cost);
+  // We want to minimize actuated torques
+  problem.add_constraint(tau.slice(6) == 0).configure(ProblemConstraint::Soft, torque_cost);
 
   try
   {
@@ -598,6 +540,12 @@ DynamicsSolver::Result DynamicsSolver::solve(bool integrate)
       }
 
       robot.state.qdd = result.qdd;
+      if (masked_fbase)
+      {
+        // Ensuring zero acceleration for the floating base. Even with the hard constraint, numerical issues
+        // could yield a drift.
+        robot.state.qdd.head(6).setZero();
+      }
       robot.integrate(dt);
     }
   }
@@ -646,6 +594,36 @@ void DynamicsSolver::remove_constraint(Constraint& constraint)
   {
     delete &constraint;
   }
+}
+
+void DynamicsSolver::set_kp(double kp)
+{
+  for (auto& task : tasks)
+  {
+    task->kp = kp;
+  }
+}
+
+void DynamicsSolver::set_kd(double kd)
+{
+  for (auto& task : tasks)
+  {
+    task->kd = kd;
+  }
+}
+
+void DynamicsSolver::set_qdd_safe(std::string joint, double qdd)
+{
+  int v = robot.get_joint_v_offset(joint);
+
+  qdd_safe[v] = qdd;
+}
+
+void DynamicsSolver::set_torque_limit(std::string joint, double limit)
+{
+  int v = robot.get_joint_v_offset(joint);
+
+  overriden_torque_limits[v] = limit;
 }
 
 void DynamicsSolver::add_task(Task& task)

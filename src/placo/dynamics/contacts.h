@@ -42,6 +42,11 @@ public:
   double weight_forces = 0.;
 
   /**
+   * @brief Extra cost for tangential forces
+   */
+  double weight_tangentials = 0.;
+
+  /**
    * @brief Weight of moments for optimization (if relevant)
    */
   double weight_moments = 0.;
@@ -66,12 +71,6 @@ public:
    * @param problem problem to which the constraints are added
    */
   virtual void add_constraints(problem::Problem& problem);
-
-  /**
-   * @brief Is it an internal contact ?
-   * @return true if the contact is internal
-   */
-  virtual bool is_internal();
 
   /**
    * @brief Expression of the forces applied on the contact, created by the \ref DynamicsSolver::solve call
@@ -101,6 +100,11 @@ public:
    * @brief associated position task
    */
   PositionTask* position_task;
+
+  /**
+   * @brief rotation matrix expressing the surface frame in the world frame (for unilateral contact)
+   */
+  Eigen::Matrix3d R_world_surface;
 
   /**
    * @brief true for unilateral contact with the ground
@@ -154,37 +158,47 @@ public:
   virtual void add_constraints(problem::Problem& problem);
 };
 
-class RelativePointContact : public Contact
+class LineContact : public Contact
 {
 public:
   /**
-   * @brief see \ref DynamicsSolver::add_relative_point_contact
+   * @brief see \ref DynamicsSolver::add_fixed_planar_contact and \ref DynamicsSolver::add_unilateral_planar_contact
    */
-  RelativePointContact(RelativePositionTask& position_task);
+  LineContact(FrameTask& frame_task, bool unilateral);
 
   /**
-   * @brief Associated relative position task
+   * @brief Associated position task
    */
-  RelativePositionTask* relative_position_task;
+  PositionTask* position_task;
+
+  /**
+   * @brief Associated orientation task
+   */
+  OrientationTask* orientation_task;
+
+  /**
+   * @brief true for unilateral contact with the ground
+   */
+  bool unilateral;
+
+  /**
+   * @brief Rectangular contact length along local x-axis
+   */
+  double length = 0.;
+
+  /**
+   * @brief rotation matrix expressing the surface frame in the world frame (for unilateral contact)
+   */
+  Eigen::Matrix3d R_world_surface;
+
+  /**
+   * @brief Returns the contact ZMP in the local frame
+   * @return zmp
+   */
+  Eigen::Vector3d zmp();
 
   virtual void update();
   virtual void add_constraints(problem::Problem& problem);
-  virtual bool is_internal();
-};
-
-class Relative6DContact : public Contact
-{
-public:
-  /**
-   * @brief see \ref DynamicsSolver::add_relative_fixed_contact
-   */
-  Relative6DContact(RelativeFrameTask& frame_task);
-
-  RelativePositionTask* relative_position_task;
-  RelativeOrientationTask* relative_orientation_task;
-
-  virtual void update();
-  virtual bool is_internal();
 };
 
 class ExternalWrenchContact : public Contact
@@ -193,12 +207,15 @@ public:
   /**
    * @brief see \ref DynamicsSolver::add_external_wrench_contact
    */
-  ExternalWrenchContact(model::RobotWrapper::FrameIndex frame_index);
+  ExternalWrenchContact(model::RobotWrapper::FrameIndex frame_index,
+                        pinocchio::ReferenceFrame reference = pinocchio::LOCAL_WORLD_ALIGNED);
 
   model::RobotWrapper::FrameIndex frame_index;
   Eigen::VectorXd w_ext = Eigen::VectorXd::Zero(6);
+  pinocchio::ReferenceFrame reference;
 
   virtual void update();
+  virtual void add_constraints(problem::Problem& problem);
 };
 
 class PuppetContact : public Contact

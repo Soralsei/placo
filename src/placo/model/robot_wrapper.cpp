@@ -3,9 +3,13 @@
 #include "pinocchio/algorithm/center-of-mass.hpp"
 #include "pinocchio/algorithm/compute-all-terms.hpp"
 #include "pinocchio/algorithm/geometry.hpp"
+#include "pinocchio/algorithm/kinematics-derivatives.hpp"
 #include "pinocchio/algorithm/rnea.hpp"
 #include "pinocchio/algorithm/crba.hpp"
 #include "pinocchio/algorithm/centroidal.hpp"
+// Following includes will be required for Pinocchio 3:
+// #include "pinocchio/collision/collision.hpp"
+// #include "pinocchio/collision/distance.hpp"
 #include "placo/tools/utils.h"
 #include <json/json.h>
 #include <filesystem>
@@ -106,7 +110,7 @@ RobotWrapper::RobotWrapper(std::string model_directory, int flags, std::string u
 
     for (auto& collision : collisions)
     {
-      std::cerr << "  -" << collisions[0].bodyA << " collides with " << collisions[0].bodyB << std::endl;
+      std::cerr << "  -" << collision.bodyA << " collides with " << collision.bodyB << std::endl;
     }
   }
 }
@@ -253,6 +257,26 @@ void RobotWrapper::update_kinematics()
   pinocchio::framesForwardKinematics(model, *data, state.q);
   pinocchio::computeJointJacobians(model, *data, state.q);
   pinocchio::computeJointJacobiansTimeVariation(model, *data, state.q, state.qd);
+  pinocchio::updateFramePlacements(model, *data);
+}
+
+void RobotWrapper::compute_hessians()
+{
+  pinocchio::computeJointKinematicHessians(model, *data);
+}
+
+Eigen::MatrixXd RobotWrapper::get_frame_hessian(FrameIndex frame, int joint_v_index)
+{
+  // Frame parent joint index
+  pinocchio::JointIndex joint_id = model.frames[frame].parent;
+  pinocchio::SE3 T = model.frames[frame].placement;
+
+  pinocchio::Tensor<double, 3, 0> H = pinocchio::getJointKinematicHessian(model, *data, joint_id, pinocchio::LOCAL);
+  const Eigen::DenseIndex matrix_offset = 6 * model.nv;
+
+  Eigen::Map<Eigen::MatrixXd> hessian(H.data() + joint_v_index * matrix_offset, 6, model.nv);
+
+  return T.inverse().toActionMatrix() * hessian;
 }
 
 RobotWrapper::State RobotWrapper::neutral_state()
@@ -292,9 +316,9 @@ void RobotWrapper::load_collision_pairs(const std::string& filename)
   }
   f >> collisions;
 
-  for (int k = 0; k < collisions.size(); k++)
+  for (size_t k = 0; k < collisions.size(); k++)
   {
-    Json::Value& entry = collisions[k];
+    Json::Value& entry = collisions[(int)k];
     if (entry.size() == 2)
     {
       if (entry[0].isInt() && entry[1].isInt())
@@ -677,5 +701,22 @@ double RobotWrapper::total_mass()
   }
 
   return mass;
+}
+
+void RobotWrapper::add_q_noise(double noise)
+{
+  auto q_random = pinocchio::randomConfiguration(model);
+
+  // Adding some noise in direction of a random configuration (except floating base)
+  for (int k = 7; k < model.nq; k++)
+  {
+    if (model.lowerPositionLimit(k) == std::numeric_limits<double>::lowest() ||
+        model.upperPositionLimit(k) == std::numeric_limits<double>::max())
+    {
+      continue;
+    }
+
+    state.q(k) += (q_random(k) - state.q(k)) * noise;
+  }
 }
 }  // namespace placo::model

@@ -4,8 +4,9 @@ Getting started
 Introduction
 ------------
 
-PlaCo offers you a way to formulate constrained *task-space inverse kinematics* problem, through a convenient
-API. This page will guide you through the main concepts through an introduction example.
+The kinematics solver allows you to formulate *task-space inverse kinematics* problems, including constraints
+such as joint limits and velocities, through a convenient API. This page will guide you through the main
+concepts through an introduction example.
 
 Creating the kinematics solver
 ------------------------------
@@ -82,7 +83,29 @@ then run the solver by calling :func:`solve() <placo.KinematicsSolver.solve>`:
     solver.solve(True)
 
 The boolean argument to :func:`solve() <placo.KinematicsSolver.solve>` means that we want to reflect the
-solution in the robot model by integrating it.
+solution in the robot state by integrating it (you can think of it as :math:`q` being updated to :math:`q + \Delta q`).
+
+.. note::
+
+    PlaCo is often used in a loop fashion, in that case, we recommend the following pattern:
+
+    .. code-block:: python
+        
+        # Be sure
+        robot.update_kinematics()
+
+        while is_running: # some main loop
+            # Update tasks data here
+
+            # Solve the IK
+            solver.solve(True)
+
+            # Update frames and jacobians
+            robot.update_kinematics()
+
+            # Optionally: dump the solver status
+            solver.dump_status()
+
 
 Putting it all together
 -----------------------
@@ -99,3 +122,8 @@ Putting all the above parts together and adding some visualization will result i
     :example:`kinematics/6axis_basic.py`
 
 You can find more examples in the :doc:`examples gallery <examples_gallery>`.
+
+See also
+--------
+
+* `Pink <https://github.com/stephane-caron/pink>`_, a task-space inverse kinematics library based on Pinocchio (Python)

@@ -10,9 +10,15 @@ CentroidalMomentumTask::CentroidalMomentumTask(Eigen::Vector3d L_world) : L_worl
 
 void CentroidalMomentumTask::update()
 {
-  auto Ag = solver->robot.centroidal_map();
+  Eigen::MatrixXd Ag = solver->robot.centroidal_map();
+  Eigen::MatrixXd Ag_angular = Ag.block(3, 0, 3, solver->N);
 
-  A = mask.apply(Ag);
+  if (solver->dt == 0)
+  {
+    throw std::runtime_error("CentroidalMomentumTask: you should set solver.dt to use this task");
+  }
+
+  A = mask.apply(Ag_angular) / solver->dt;
   b = mask.apply(L_world);
 }
 

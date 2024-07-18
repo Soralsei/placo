@@ -43,9 +43,16 @@ void exposeRobotType(class_<RobotType, W1>& type)
       .def("set_torque_limit", &RobotType::set_torque_limit)
       .def("set_joint_limits", &RobotType::set_joint_limits)
       .def("update_kinematics", &RobotType::update_kinematics)
+      .def("compute_hessians", &RobotType::compute_hessians)
+      .def(
+          "get_frame_hessian",
+          +[](RobotType& robot, const std::string frame, const std::string joint) {
+            return robot.get_frame_hessian(robot.model.getFrameId(frame), robot.get_joint_v_offset(joint));
+          })
       .def("get_T_world_fbase", &RobotType::get_T_world_fbase)
       .def("set_T_world_fbase", &RobotType::set_T_world_fbase)
       .def("com_world", &RobotType::com_world)
+      .def("centroidal_map", &RobotType::centroidal_map)
       .def("joint_names", &RobotType::joint_names, joint_names_overloads())
       .def("frame_names", &RobotType::frame_names)
       .def("self_collisions", &RobotType::self_collisions)
@@ -118,7 +125,8 @@ void exposeRobotType(class_<RobotType, W1>& type)
           "joint_jacobian", +[](RobotType& robot, const std::string& joint,
                                 const std::string& reference) { return robot.joint_jacobian(joint, reference); })
       .def(
-          "make_solver", +[](RobotType& robot) { return placo::kinematics::KinematicsSolver(robot); });
+          "make_solver", +[](RobotType& robot) { return placo::kinematics::KinematicsSolver(robot); })
+      .def("add_q_noise", &RobotType::add_q_noise);
 }
 
 void exposeRobotWrapper()
