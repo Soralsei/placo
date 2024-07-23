@@ -2,7 +2,7 @@ Dynamics
 ========
 
  .. toctree::
-    :caption: Dynamics solver (work in progress)
+    :caption: Dynamics solver
     :maxdepth: 2
 
     introduction
@@ -10,6 +10,7 @@ Dynamics
     concepts
     limits
     regularization
+    solver_status
     loop_closures
 
 .. toctree::
@@ -33,4 +34,10 @@ Dynamics
    external_wrench_contact
    task_contact
    weighting_deactivating_contacts
+   
+.. toctree::
+   :caption: Examples
+   :maxdepth: 2
+
+   examples_gallery
    

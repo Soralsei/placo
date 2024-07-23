@@ -72,6 +72,12 @@ public:
   bool is_scalar() const;
 
   /**
+   * @brief checks if the expression is constant (doesn't depend on decision variables)
+   * @return true if the expression is constant
+   */
+  bool is_constant() const;
+
+  /**
    * @brief Number of cols in A
    * @return number of cols in A
    */
@@ -95,7 +101,7 @@ public:
    * @param M matrix
    * @return expression
    */
-  Expression multiply(const Eigen::MatrixXd M);
+  Expression left_multiply(const Eigen::MatrixXd M);
 
   /**
    * @brief Reduces a multi-rows expression to the sum of its items
@@ -117,6 +123,7 @@ public:
   // Multiplying by a scalar
   Expression operator*(double f) const;
   friend Expression operator*(double f, const Expression& e);
+  Expression operator*(const Expression& other) const;
 
   // Adding a vector
   Expression operator+(const Eigen::VectorXd v) const;
